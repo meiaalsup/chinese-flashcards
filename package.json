@@ -1,0 +1,16 @@
+{
+  "name": "chinese-flashcards",
+  "version": "1.0.0",
+  "description": "Chinese/English flashcard app with pinyin",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "cc-cedict": "^1.1.1",
+    "express": "^4.18.2",
+    "pinyin-pro": "^3.24.2"
+  }
+}
