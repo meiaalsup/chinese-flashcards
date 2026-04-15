@@ -483,6 +483,8 @@ select {
   perspective: 1200px;
   margin: 0 auto 28px;
   max-width: 480px;
+  /* Contain the 3D stacking context so it never overlaps elements below */
+  isolation: isolate;
 }
 
 .flashcard {
@@ -490,7 +492,7 @@ select {
   height: 280px;
   cursor: pointer;
   transform-style: preserve-3d;
-  transition: transform 0.45s;
+  transition: transform 0.4s ease;
 }
 
 .flashcard.flipped { transform: rotateY(180deg); }
@@ -509,6 +511,7 @@ select {
   border: 1px solid var(--border);
   border-radius: 18px;
   backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -516,11 +519,22 @@ select {
   padding: 32px;
   text-align: center;
   box-shadow: var(--shadow);
+  /* Prevent back face from intercepting pointer events when hidden */
+  pointer-events: auto;
 }
 
 .flashcard-back {
   transform: rotateY(180deg);
   background: var(--bg3);
+}
+
+/* When card is NOT flipped, back face should not receive clicks */
+.flashcard:not(.flipped) .flashcard-back {
+  pointer-events: none;
+}
+/* When card IS flipped, front face should not receive clicks */
+.flashcard.flipped .flashcard-front {
+  pointer-events: none;
 }
 
 .card-chinese {
