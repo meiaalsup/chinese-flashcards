@@ -35,6 +35,21 @@ db.exec(`
     correct INTEGER NOT NULL,
     studied_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL DEFAULT 'topic',
+    color TEXT DEFAULT '#6366f1',
+    emoji TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 100
+  );
+
+  CREATE TABLE IF NOT EXISTS card_tags (
+    card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (card_id, tag_id)
+  );
 `);
 
 // Seed default smart groups

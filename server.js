@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const db = require('./db');
+const { autoTagCard } = require('./autotag');
 
 const app = express();
 app.use(express.json());
@@ -95,7 +96,9 @@ app.post('/api/cards', (req, res) => {
   }
 
   const result = db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?)').run(ch, py, en);
-  res.json(db.prepare('SELECT * FROM cards WHERE id = ?').get(result.lastInsertRowid));
+  const newId = result.lastInsertRowid;
+  autoTagCard(newId);
+  res.json(db.prepare('SELECT * FROM cards WHERE id = ?').get(newId));
 });
 
 app.put('/api/cards/:id', (req, res) => {
@@ -169,7 +172,9 @@ app.post('/api/generate', (req, res) => {
       }
 
       const result = insertCard.run(chinese, pinyinStr, english);
-      const card = db.prepare('SELECT * FROM cards WHERE id = ?').get(result.lastInsertRowid);
+      const cardId = result.lastInsertRowid;
+      autoTagCard(cardId);
+      const card = db.prepare('SELECT * FROM cards WHERE id = ?').get(cardId);
       created.push(card);
 
       if (groupId) insertCG.run(card.id, groupId);
@@ -238,6 +243,60 @@ app.post('/api/groups/:id/cards', (req, res) => {
 app.delete('/api/groups/:id/cards/:cardId', (req, res) => {
   db.prepare('DELETE FROM card_groups WHERE group_id = ? AND card_id = ?')
     .run(req.params.id, req.params.cardId);
+  res.json({ ok: true });
+});
+
+// ─── Tags API ────────────────────────────────────────────────────────────────
+
+app.get('/api/tags', (req, res) => {
+  const tags = db.prepare('SELECT * FROM tags ORDER BY type DESC, sort_order').all();
+  const withCounts = tags.map(t => {
+    const { n } = db.prepare('SELECT COUNT(*) as n FROM card_tags WHERE tag_id = ?').get(t.id);
+    return { ...t, count: n };
+  });
+  res.json(withCounts);
+});
+
+app.get('/api/tags/:id/cards', (req, res) => {
+  const tag = db.prepare('SELECT * FROM tags WHERE id = ?').get(req.params.id);
+  if (!tag) return res.status(404).json({ error: 'Not found' });
+
+  const cards = db.prepare(`
+    SELECT c.* FROM cards c
+    JOIN card_tags ct ON ct.card_id = c.id
+    WHERE ct.tag_id = ?
+    ORDER BY c.created_at DESC
+  `).all(tag.id);
+
+  res.json(cards.map(c => ({ ...c, stats: getCardStats(c.id) })));
+});
+
+// Get tags for a specific card
+app.get('/api/cards/:id/tags', (req, res) => {
+  const tags = db.prepare(`
+    SELECT t.* FROM tags t
+    JOIN card_tags ct ON ct.tag_id = t.id
+    WHERE ct.card_id = ?
+    ORDER BY t.type DESC, t.sort_order
+  `).all(req.params.id);
+  res.json(tags);
+});
+
+// Update a card's level tag
+app.put('/api/cards/:id/level', (req, res) => {
+  const { level } = req.body;
+  const tag = db.prepare("SELECT * FROM tags WHERE name = ? AND type = 'level'").get(level);
+  if (!tag) return res.status(400).json({ error: 'Invalid level' });
+
+  const levelTagIds = db.prepare("SELECT id FROM tags WHERE type = 'level'").all().map(t => t.id);
+
+  db.transaction(() => {
+    for (const lid of levelTagIds) {
+      db.prepare('DELETE FROM card_tags WHERE card_id = ? AND tag_id = ?').run(req.params.id, lid);
+    }
+    db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag_id) VALUES (?, ?)').run(req.params.id, tag.id);
+  })();
+
   res.json({ ok: true });
 });
 

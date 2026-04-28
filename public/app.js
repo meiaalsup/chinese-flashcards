@@ -59,6 +59,8 @@ async function pollDictStatus() {
 
 let allCards  = [];
 let allGroups = [];
+let allTags   = [];           // all tag objects from /api/tags
+let cardTagMap = new Map();   // cardId → [tag, ...]  (populated lazily per card)
 
 // Study session state
 let studyQueue     = [];
@@ -172,7 +174,58 @@ $('preview-edit-all').addEventListener('click', () => switchTab('cards'));
 
 /* ── Cards tab ─────────────────────────────────────────────────────────── */
 
-function renderCards(filter = '') {
+// Tag filter dropdown — populated after tags load
+function populateTagFilter() {
+  const sel = $('cards-tag-filter');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All tags</option>';
+
+  const levels = allTags.filter(t => t.type === 'level');
+  const topics = allTags.filter(t => t.type === 'topic');
+
+  if (levels.length) {
+    const og = document.createElement('optgroup'); og.label = 'Level';
+    levels.forEach(t => { const o = document.createElement('option'); o.value = t.id; o.textContent = `${t.emoji} ${t.name}`; og.appendChild(o); });
+    sel.appendChild(og);
+  }
+  if (topics.length) {
+    const og = document.createElement('optgroup'); og.label = 'Topic';
+    topics.forEach(t => { const o = document.createElement('option'); o.value = t.id; o.textContent = `${t.emoji} ${t.name}`; og.appendChild(o); });
+    sel.appendChild(og);
+  }
+  if (prev) sel.value = prev;
+}
+
+// cardId → tag list (fetched + cached)
+const tagCache = new Map();
+async function getCardTags(cardId) {
+  if (tagCache.has(cardId)) return tagCache.get(cardId);
+  const tags = await api('GET', `/api/cards/${cardId}/tags`);
+  tagCache.set(cardId, tags);
+  return tags;
+}
+
+// Pre-fetch tags for all visible cards
+async function prefetchTagsForCards(cardIds) {
+  const uncached = cardIds.filter(id => !tagCache.has(id));
+  if (!uncached.length) return;
+  // Fetch in parallel, 20 at a time
+  for (let i = 0; i < uncached.length; i += 20) {
+    await Promise.all(uncached.slice(i, i + 20).map(id => getCardTags(id)));
+  }
+}
+
+// Card IDs that match a tag filter (built from cached data)
+function filterByTag(cards, tagId) {
+  if (!tagId) return cards;
+  const tid = parseInt(tagId);
+  return cards.filter(c => {
+    const tags = tagCache.get(c.id);
+    return tags && tags.some(t => t.id === tid);
+  });
+}
+
+function renderCards(filter = '', tagId = '') {
   const container = $('cards-list');
   container.innerHTML = '';
 
@@ -184,6 +237,19 @@ function renderCards(filter = '') {
       (c.pinyin  || '').toLowerCase().includes(q) ||
       (c.english || '').toLowerCase().includes(q)
     );
+  }
+
+  // Tag filter — uses cached data, renders progressively
+  if (tagId) {
+    const alreadyCached = cards.every(c => tagCache.has(c.id));
+    if (alreadyCached) {
+      cards = filterByTag(cards, tagId);
+    } else {
+      // Show loading state, then re-render once fetched
+      container.innerHTML = '<div class="empty-state">Loading…</div>';
+      prefetchTagsForCards(cards.map(c => c.id)).then(() => renderCards(filter, tagId));
+      return;
+    }
   }
 
   $('cards-count').textContent = `${cards.length} card${cards.length !== 1 ? 's' : ''}`;
@@ -213,6 +279,18 @@ function buildCardItem(card) {
     div.appendChild(stats);
   }
 
+  // Tag chips (async, rendered after mount)
+  const tagRow = el('div', 'tag-row');
+  div.appendChild(tagRow);
+  getCardTags(card.id).then(tags => {
+    tagRow.innerHTML = '';
+    tags.forEach(t => {
+      const chip = el('span', `tag-chip ${t.type}`, `${t.emoji} ${t.name}`);
+      chip.style.setProperty('--tag-color', t.color);
+      tagRow.appendChild(chip);
+    });
+  });
+
   const actions = el('div', 'card-item-actions');
   const editBtn = el('button', 'card-action-btn', 'Edit');
   editBtn.addEventListener('click', e => { e.stopPropagation(); openEditCard(card); });
@@ -228,7 +306,8 @@ function buildCardItem(card) {
   return div;
 }
 
-$('cards-search').addEventListener('input', e => renderCards(e.target.value));
+$('cards-search').addEventListener('input', e => renderCards(e.target.value, $('cards-tag-filter').value));
+$('cards-tag-filter').addEventListener('change', e => renderCards($('cards-search').value, e.target.value));
 $('add-card-btn').addEventListener('click', () => openEditCard(null));
 
 function openEditCard(card) {
@@ -295,11 +374,19 @@ async function deleteCard(id) {
 
 function renderGroups() {
   $('smart-groups').innerHTML = '';
+  $('level-tags').innerHTML   = '';
+  $('topic-tags').innerHTML   = '';
   $('custom-groups').innerHTML = '';
 
   allGroups.filter(g => g.is_smart).forEach(g =>
     $('smart-groups').appendChild(buildGroupCard(g))
   );
+
+  const levelTags = allTags.filter(t => t.type === 'level');
+  const topicTags = allTags.filter(t => t.type === 'topic');
+
+  levelTags.forEach(t => $('level-tags').appendChild(buildTagCard(t)));
+  topicTags.forEach(t => $('topic-tags').appendChild(buildTagCard(t)));
 
   const customs = allGroups.filter(g => !g.is_smart);
   if (!customs.length) {
@@ -307,6 +394,74 @@ function renderGroups() {
   } else {
     customs.forEach(g => $('custom-groups').appendChild(buildGroupCard(g)));
   }
+}
+
+function buildTagCard(tag) {
+  const div = el('div', 'group-card');
+  div.style.setProperty('--group-color', tag.color);
+
+  const nameEl  = el('div', 'group-name', `${tag.emoji} ${tag.name}`);
+  const countEl = el('div', 'group-count', `${tag.count} card${tag.count !== 1 ? 's' : ''}`);
+  div.append(nameEl, countEl);
+
+  div.addEventListener('click', async () => {
+    const cards = await api('GET', `/api/tags/${tag.id}/cards`);
+    openTagDetail(tag, cards);
+  });
+  return div;
+}
+
+async function openTagDetail(tag, cards) {
+  $('modal-title').textContent = `${tag.emoji} ${tag.name}`;
+  const body = $('modal-body');
+  body.innerHTML = '';
+
+  body.appendChild(el('p', 'section-sub', `${cards.length} card${cards.length !== 1 ? 's' : ''}`));
+
+  if (cards.length) {
+    const list = el('div', '');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:12px;max-height:280px;overflow-y:auto';
+    cards.forEach(card => {
+      const row = el('div', '');
+      row.style.cssText = 'padding:8px 10px;background:var(--bg3);border-radius:8px';
+      row.innerHTML = `<span style="font-size:18px">${card.chinese || ''}</span> <span style="color:var(--accent-h);font-size:13px">${card.pinyin || ''}</span> <span style="color:var(--text-dim);font-size:13px">${card.english || ''}</span>`;
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+  } else {
+    body.appendChild(el('p', 'empty-state', 'No cards yet.'));
+  }
+
+  // Direction toggle + study button
+  const dirWrap = el('div', '');
+  dirWrap.style.cssText = 'margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap';
+  const dirLabel = el('span', 'label', 'Study direction'); dirLabel.style.marginBottom = '0';
+  const dirToggle = el('div', 'direction-toggle');
+  const bZhEn = el('button', 'dir-btn' + (studyDir === 'zh-en' ? ' active' : ''), 'Chinese → English');
+  bZhEn.dataset.dir = 'zh-en';
+  const bEnZh = el('button', 'dir-btn' + (studyDir === 'en-zh' ? ' active' : ''), 'English → Chinese');
+  bEnZh.dataset.dir = 'en-zh';
+  [bZhEn, bEnZh].forEach(b => b.addEventListener('click', () => {
+    [bZhEn, bEnZh].forEach(x => x.classList.remove('active'));
+    b.classList.add('active'); studyDir = b.dataset.dir;
+    document.querySelectorAll('.dir-btn').forEach(x => x.classList.toggle('active', x.dataset.dir === studyDir));
+  }));
+  dirToggle.append(bZhEn, bEnZh);
+  dirWrap.append(dirLabel, dirToggle);
+  body.appendChild(dirWrap);
+
+  if (cards.length) {
+    const footer = el('div', 'modal-footer');
+    const studyBtn = el('button', 'btn btn-primary', 'Study →');
+    studyBtn.addEventListener('click', () => {
+      closeModal();
+      startStudySession(`tag:${tag.id}`, `${tag.emoji} ${tag.name}`, cards);
+    });
+    footer.appendChild(studyBtn);
+    body.appendChild(footer);
+  }
+
+  openModal();
 }
 
 function buildGroupCard(group) {
@@ -701,7 +856,13 @@ $('done-back').addEventListener('click', () => {
   renderStudyPicker();
 });
 $('done-retry').addEventListener('click', async () => {
-  const cards = await api('GET', `/api/groups/${studyGroupId}/cards`);
+  let cards;
+  if (typeof studyGroupId === 'string' && studyGroupId.startsWith('tag:')) {
+    const tagId = studyGroupId.slice(4);
+    cards = await api('GET', `/api/tags/${tagId}/cards`);
+  } else {
+    cards = await api('GET', `/api/groups/${studyGroupId}/cards`);
+  }
   startStudySession(studyGroupId, studyGroupName, cards);
 });
 
@@ -728,15 +889,19 @@ function switchTab(name) {
 /* ── Bootstrap ──────────────────────────────────────────────────────────── */
 
 async function loadAll() {
-  [allCards, allGroups] = await Promise.all([
+  [allCards, allGroups, allTags] = await Promise.all([
     api('GET', '/api/cards'),
     api('GET', '/api/groups'),
+    api('GET', '/api/tags'),
   ]);
+  cardTagMap.clear();
+  tagCache.clear();
 }
 
 async function init() {
   await loadAll();
   loadGroupsIntoSelect();
+  populateTagFilter();
   pollDictStatus();
 }
 

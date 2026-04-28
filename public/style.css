@@ -795,6 +795,39 @@ select {
   width: 100%;
 }
 
+/* ── Tag chips ────────────────────────────────────────────────────────── */
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tag-chip.level {
+  background: color-mix(in srgb, var(--tag-color) 15%, transparent);
+  color: var(--tag-color);
+  border-color: color-mix(in srgb, var(--tag-color) 30%, transparent);
+}
+
+.tag-chip.topic {
+  background: var(--bg3);
+  color: var(--text-dim);
+  border-color: var(--border);
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

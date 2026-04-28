@@ -73,6 +73,9 @@ hello
         </div>
         <div class="header-actions">
           <input type="search" id="cards-search" class="search-input" placeholder="Search..." />
+          <select id="cards-tag-filter" class="select" style="width:auto">
+            <option value="">All tags</option>
+          </select>
           <button id="add-card-btn" class="btn btn-primary">+ New Card</button>
         </div>
       </div>
@@ -90,6 +93,14 @@ hello
       <div class="groups-section">
         <h3 class="groups-section-label">Smart Groups</h3>
         <div id="smart-groups" class="groups-grid"></div>
+      </div>
+      <div class="groups-section">
+        <h3 class="groups-section-label">By Level</h3>
+        <div id="level-tags" class="groups-grid"></div>
+      </div>
+      <div class="groups-section">
+        <h3 class="groups-section-label">By Topic</h3>
+        <div id="topic-tags" class="groups-grid"></div>
       </div>
       <div class="groups-section">
         <h3 class="groups-section-label">My Groups</h3>
