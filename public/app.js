@@ -90,8 +90,9 @@ document.querySelectorAll('.nav-tab').forEach(btn => {
 
 let previewCards = [];
 
-function loadGroupsIntoSelect() {
+function loadGroupsIntoSelect(selectedId = null) {
   const select = $('gen-group');
+  const prev = selectedId ?? select.value;
   const customs = allGroups.filter(g => !g.is_smart);
   select.innerHTML = '<option value="">— none —</option>';
   customs.forEach(g => {
@@ -99,7 +100,44 @@ function loadGroupsIntoSelect() {
     o.value = g.id; o.textContent = g.name;
     select.appendChild(o);
   });
+  const newOpt = document.createElement('option');
+  newOpt.value = '__new__'; newOpt.textContent = '＋ Create new group…';
+  select.appendChild(newOpt);
+  if (prev) select.value = prev;
 }
+
+$('gen-group').addEventListener('change', () => {
+  if ($('gen-group').value === '__new__') {
+    $('gen-new-group-wrap').style.display = 'flex';
+    $('gen-new-group-name').value = '';
+    $('gen-new-group-name').focus();
+  } else {
+    $('gen-new-group-wrap').style.display = 'none';
+  }
+});
+
+async function confirmNewGroup() {
+  const name = $('gen-new-group-name').value.trim();
+  if (!name) { $('gen-new-group-name').focus(); return; }
+  try {
+    const group = await api('POST', '/api/groups', { name, color: '#4f8ef7' });
+    await loadAll();
+    loadGroupsIntoSelect(group.id);
+    $('gen-new-group-wrap').style.display = 'none';
+  } catch (e) {
+    alert('Error creating group: ' + e.message);
+  }
+}
+
+$('gen-new-group-confirm').addEventListener('click', confirmNewGroup);
+$('gen-new-group-cancel').addEventListener('click', () => {
+  $('gen-new-group-wrap').style.display = 'none';
+  $('gen-group').value = '';
+});
+$('gen-new-group-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmNewGroup();
+  if (e.key === 'Escape') $('gen-new-group-cancel').click();
+});
 
 $('gen-btn').addEventListener('click', async () => {
   const text = $('gen-input').value.trim();

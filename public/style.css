@@ -225,7 +225,9 @@ select {
   gap: 14px;
 }
 
-.gen-group-row { display: flex; flex-direction: column; }
+.gen-group-row { display: flex; flex-direction: column; gap: 8px; }
+.gen-new-group-wrap { display: flex; align-items: center; gap: 8px; }
+.gen-new-group-wrap input[type="text"] { flex: 1; }
 
 .generate-preview {
   background: var(--bg2);

@@ -16,11 +16,11 @@ const TOPIC_KEYWORDS = {
     'download', 'upload', 'wifi', 'signal', 'bluetooth',
   ],
   'Science & Biology': [
-    'laboratory', 'lab', 'cell', 'experiment', 'cultivate', 'breed', 'bioreactor',
-    'gene', 'genetic', 'genetics', 'genotype', 'phenotype', 'embryo', 'blastocyst',
-    'ivf', 'egg retrieval', 'frozen embryo', 'heredity', 'inherit', 'trait', 'dna',
-    'rna', 'protein', 'molecule', 'bacteria', 'virus', 'analysis', 'analyze',
-    'quantity', 'quality', 'risk', 'detect', 'test', 'research', 'science',
+    'laboratory', 'lab', 'bioreactor', 'gene', 'genetic', 'genetics', 'genotype',
+    'phenotype', 'embryo', 'blastocyst', 'ivf', 'egg retrieval', 'frozen embryo',
+    'heredity', 'inherit', 'trait', 'dna', 'rna', 'protein', 'molecule',
+    'bacteria', 'virus', 'sperm', 'ovum', 'cell biology', 'genomic',
+    'chromosome', 'specimen', 'pathogen',
   ],
   'Cafe & Drinks': [
     'latte', 'coffee', 'tea', 'drink', 'hot drink', 'cold drink', 'juice', 'boba',
@@ -77,7 +77,6 @@ const TOPIC_KEYWORDS = {
 // Based on character count and syllable count (rough proxy for complexity)
 
 function guessLevel(chinese, english) {
-  const hanziCount = (chinese || '').length;
   const syllableCount = (chinese || '').replace(/[^\u4e00-\u9fff\u3400-\u4dbf]/g, '').length;
 
   // Specialized: very long compounds or highly technical English
@@ -86,17 +85,21 @@ function guessLevel(chinese, english) {
   if (technicalTerms.some(t => (english || '').toLowerCase().includes(t))) return 'Specialized';
   if (syllableCount >= 5) return 'Specialized';
 
-  // Advanced: 3-4 hanzi compounds, or specific professional terms
+  // Advanced: 3-4 hanzi compounds
   if (syllableCount >= 3) return 'Advanced';
 
-  // Beginner: simple single/double hanzi that are very common
+  // Beginner: simple single characters that are very common
   const beginnerWords = ['water', 'fire', 'wood', 'hello', 'thank', 'goodbye', 'cat', 'dog',
     'fish', 'bird', 'rice', 'eat', 'drink', 'go', 'come', 'good', 'bad', 'big', 'small',
     'mother', 'father', 'friend', 'student', 'teacher', 'person'];
   if (beginnerWords.some(w => (english || '').toLowerCase().includes(w))) return 'Beginner';
   if (syllableCount === 1) return 'Beginner';
 
-  return 'Intermediate';
+  // Intermediate: split by complexity of English definition
+  // 1-3 words = simpler single-concept word → Intermediate 1
+  // 4+ words  = phrase or multiple meanings  → Intermediate 2
+  const wordCount = (english || '').trim().split(/\s+/).length;
+  return wordCount <= 3 ? 'Intermediate 1' : 'Intermediate 2';
 }
 
 // ── Main auto-tag function ──────────────────────────────────────────────────
