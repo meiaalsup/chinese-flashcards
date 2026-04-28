@@ -830,6 +830,31 @@ select {
   border-color: var(--border);
 }
 
+/* Topic checkbox grid in Edit Card modal */
+.topic-checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.topic-checkbox-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.topic-checkbox-wrap input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.topic-checkbox-wrap .tag-chip {
+  cursor: pointer;
+  user-select: none;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

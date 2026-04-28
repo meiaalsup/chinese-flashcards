@@ -300,6 +300,25 @@ app.put('/api/cards/:id/level', (req, res) => {
   res.json({ ok: true });
 });
 
+// Replace all topic tags for a card
+app.put('/api/cards/:id/topics', (req, res) => {
+  const { tagIds } = req.body; // array of topic tag IDs to apply
+  if (!Array.isArray(tagIds)) return res.status(400).json({ error: 'tagIds must be an array' });
+
+  const topicTagIds = db.prepare("SELECT id FROM tags WHERE type = 'topic'").all().map(t => t.id);
+
+  db.transaction(() => {
+    for (const tid of topicTagIds) {
+      db.prepare('DELETE FROM card_tags WHERE card_id = ? AND tag_id = ?').run(req.params.id, tid);
+    }
+    for (const tid of tagIds) {
+      db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag_id) VALUES (?, ?)').run(req.params.id, tid);
+    }
+  })();
+
+  res.json({ ok: true });
+});
+
 // ─── Study API ───────────────────────────────────────────────────────────────
 
 app.post('/api/study', (req, res) => {

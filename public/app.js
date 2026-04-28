@@ -380,6 +380,44 @@ function openEditCard(card) {
     } catch (_) {}
   });
 
+  // ── Topic tag checkboxes (only for existing cards) ──
+  let selectedTopicIds = new Set();
+  const topicSection = el('div', 'modal-field');
+  const topicLbl = el('label', 'label', 'Categories');
+  topicSection.appendChild(topicLbl);
+
+  const topicGrid = el('div', 'topic-checkbox-grid');
+  topicSection.appendChild(topicGrid);
+  body.appendChild(topicSection);
+
+  const topicTags = allTags.filter(t => t.type === 'topic');
+
+  async function buildTopicCheckboxes() {
+    topicGrid.innerHTML = '';
+    let cardTopicIds = new Set();
+    if (card) {
+      const existing = await api('GET', `/api/cards/${card.id}/tags`);
+      cardTopicIds = new Set(existing.filter(t => t.type === 'topic').map(t => t.id));
+    }
+    selectedTopicIds = new Set(cardTopicIds);
+
+    topicTags.forEach(tag => {
+      const wrap = el('label', 'topic-checkbox-wrap');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = cardTopicIds.has(tag.id);
+      cb.addEventListener('change', () => {
+        if (cb.checked) selectedTopicIds.add(tag.id);
+        else selectedTopicIds.delete(tag.id);
+      });
+      const chip = el('span', `tag-chip topic`, `${tag.emoji} ${tag.name}`);
+      chip.style.setProperty('--tag-color', tag.color);
+      wrap.append(cb, chip);
+      topicGrid.appendChild(wrap);
+    });
+  }
+  buildTopicCheckboxes();
+
   const footer = el('div', 'modal-footer');
   const cancelBtn = el('button', 'btn btn-ghost', 'Cancel');
   cancelBtn.addEventListener('click', closeModal);
@@ -391,8 +429,17 @@ function openEditCard(card) {
     const english = $('edit-english').value.trim();
     if (!chinese && !english) { alert('Enter Chinese or English'); return; }
     try {
-      if (card) await api('PUT', `/api/cards/${card.id}`, { chinese, pinyin, english });
-      else      await api('POST', '/api/cards', { chinese, pinyin, english });
+      let savedCard;
+      if (card) {
+        savedCard = await api('PUT', `/api/cards/${card.id}`, { chinese, pinyin, english });
+      } else {
+        savedCard = await api('POST', '/api/cards', { chinese, pinyin, english });
+      }
+      // Save topic tags if any checkboxes were touched
+      if (selectedTopicIds.size > 0 || card) {
+        await api('PUT', `/api/cards/${savedCard.id}/topics`, { tagIds: [...selectedTopicIds] });
+      }
+      tagCache.delete(savedCard.id);
       await loadAll();
       renderCards($('cards-search').value);
       closeModal();

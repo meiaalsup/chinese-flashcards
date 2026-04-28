@@ -115,10 +115,16 @@ function autoTagCard(cardId) {
   const getTagId = name => db.prepare('SELECT id FROM tags WHERE name = ?').get(name)?.id;
 
   db.transaction(() => {
-    // Topic
+    // Topic — use word-boundary matching for single-word keywords so that
+    // e.g. "mushroom" doesn't match the Housing keyword "room".
+    function kwMatch(text, kw) {
+      if (kw.includes(' ')) return text.includes(kw); // multi-word: substring is fine
+      return new RegExp('\\b' + kw + '\\b').test(text);
+    }
+
     let matched = false;
     for (const [topic, keywords] of Object.entries(TOPIC_KEYWORDS)) {
-      if (keywords.some(kw => en.includes(kw))) {
+      if (keywords.some(kw => kwMatch(en, kw))) {
         const id = getTagId(topic);
         if (id) { insertTag.run(cardId, id); matched = true; }
       }
