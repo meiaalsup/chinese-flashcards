@@ -173,8 +173,8 @@ function renderPreview() {
     const makeInput = (val, placeholder, key) => {
       const inp = document.createElement('input');
       inp.type = 'text'; inp.value = val || ''; inp.placeholder = placeholder;
-      inp.addEventListener('blur', async e => {
-        const newVal = e.target.value.trim();
+      async function saveField(newVal) {
+        newVal = newVal.trim();
         if (newVal === (card[key] || '')) return;
         try {
           const updated = await api('PUT', `/api/cards/${card.id}`, { [key]: newVal });
@@ -187,7 +187,9 @@ function renderPreview() {
             if (!inputs[2].value) inputs[2].value = updated.english || '';
           }
         } catch (_) {}
-      });
+      }
+      inp.addEventListener('blur',   e => saveField(e.target.value));
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
       return inp;
     };
 

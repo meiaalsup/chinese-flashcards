@@ -88,18 +88,19 @@ function guessLevel(chinese, english) {
   // Advanced: 3-4 hanzi compounds
   if (syllableCount >= 3) return 'Advanced';
 
-  // Beginner: simple single characters that are very common
+  // Beginner: single characters with very basic meanings
   const beginnerWords = ['water', 'fire', 'wood', 'hello', 'thank', 'goodbye', 'cat', 'dog',
     'fish', 'bird', 'rice', 'eat', 'drink', 'go', 'come', 'good', 'bad', 'big', 'small',
     'mother', 'father', 'friend', 'student', 'teacher', 'person'];
-  if (beginnerWords.some(w => (english || '').toLowerCase().includes(w))) return 'Beginner';
-  if (syllableCount === 1) return 'Beginner';
+  if (syllableCount === 1 && beginnerWords.some(w => (english || '').toLowerCase().includes(w))) return 'Beginner';
+  if (syllableCount === 1) return 'Beginner 2'; // single chars that aren't ultra-basic
 
-  // Intermediate: split by complexity of English definition
-  // 1-3 words = simpler single-concept word → Intermediate 1
-  // 4+ words  = phrase or multiple meanings  → Intermediate 2
+  // 2-char words: split by how common/foundational the concept is
+  // Short English definition (1-2 words) = probably a clear, common concept → Beginner 2
+  // Longer definition = more nuanced/contextual → Intermediate 1 or 2
   const wordCount = (english || '').trim().split(/\s+/).length;
-  return wordCount <= 3 ? 'Intermediate 1' : 'Intermediate 2';
+  if (wordCount <= 2) return 'Beginner 2';
+  return wordCount <= 5 ? 'Intermediate 1' : 'Intermediate 2';
 }
 
 // ── Main auto-tag function ──────────────────────────────────────────────────
