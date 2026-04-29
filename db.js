@@ -1,7 +1,10 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const db = new Database(path.join(__dirname, 'flashcards.db'));
+// On Railway/Render, set DB_PATH env var to a persistent volume path (e.g. /data/flashcards.db)
+// Locally it just uses the project directory as before.
+const dbPath = process.env.DB_PATH || path.join(__dirname, 'flashcards.db');
+const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
