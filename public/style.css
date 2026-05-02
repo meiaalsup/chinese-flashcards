@@ -363,6 +363,9 @@ select {
 
 .card-action-btn:hover { color: var(--text); border-color: var(--accent); }
 .card-action-btn.del:hover { color: var(--red); border-color: var(--red); }
+.card-action-btn.learned-toggle { color: var(--text-dim); }
+.card-action-btn.learned-toggle:hover { color: #10b981; border-color: #10b981; }
+.card-action-btn.learned-toggle.is-learned { color: #10b981; border-color: #10b981; background: color-mix(in srgb, #10b981 12%, transparent); }
 
 /* ── Groups grid ──────────────────────────────────────────────────────── */
 .groups-section { margin-bottom: 32px; }
@@ -599,9 +602,28 @@ select {
 
 .answer-btns {
   display: flex;
-  gap: 14px;
-  max-width: 480px;
+  gap: 12px;
+  max-width: 600px;
   margin: 0 auto;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.btn-learned {
+  background: color-mix(in srgb, #10b981 12%, transparent);
+  color: #10b981;
+  border: 1.5px solid color-mix(in srgb, #10b981 40%, transparent);
+  border-radius: 10px;
+  padding: 0 20px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.btn-learned:hover {
+  background: color-mix(in srgb, #10b981 22%, transparent);
+  border-color: #10b981;
 }
 
 /* ── Session done ─────────────────────────────────────────────────────── */

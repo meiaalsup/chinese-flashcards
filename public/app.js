@@ -334,12 +334,27 @@ function buildCardItem(card) {
   const actions = el('div', 'card-item-actions');
   const editBtn = el('button', 'card-action-btn', 'Edit');
   editBtn.addEventListener('click', e => { e.stopPropagation(); openEditCard(card); });
+
+  const learnedBtn = el('button', `card-action-btn learned-toggle ${card.learned ? 'is-learned' : ''}`,
+    card.learned ? '✓ Learned' : 'Mark learned');
+  learnedBtn.title = card.learned ? 'Click to move back to active' : 'Mark as learned and hide from deck';
+  learnedBtn.addEventListener('click', async e => {
+    e.stopPropagation();
+    const nowLearned = !card.learned;
+    await api('PUT', `/api/cards/${card.id}/learned`, { learned: nowLearned });
+    card.learned = nowLearned ? 1 : 0;
+    learnedBtn.textContent = nowLearned ? '✓ Learned' : 'Mark learned';
+    learnedBtn.classList.toggle('is-learned', nowLearned);
+    learnedBtn.title = nowLearned ? 'Click to move back to active' : 'Mark as learned and hide from deck';
+    await loadAll();
+  });
+
   const delBtn = el('button', 'card-action-btn del', 'Delete');
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
     if (confirm(`Delete "${card.chinese || card.english}"?`)) deleteCard(card.id);
   });
-  actions.append(editBtn, delBtn);
+  actions.append(editBtn, learnedBtn, delBtn);
   div.appendChild(actions);
 
   div.addEventListener('click', () => speak(card.chinese));
@@ -909,6 +924,18 @@ async function recordAnswer(correct) {
 
 $('btn-right').addEventListener('click', () => recordAnswer(true));
 $('btn-wrong').addEventListener('click', () => recordAnswer(false));
+
+$('btn-learned').addEventListener('click', async () => {
+  const card = studyQueue[studyIndex];
+  try { await api('PUT', `/api/cards/${card.id}/learned`, { learned: true }); } catch (_) {}
+  // Remove from queue and advance without counting as right/wrong
+  studyQueue.splice(studyIndex, 1);
+  if (studyQueue.length === 0 || studyIndex >= studyQueue.length) {
+    endSession();
+  } else {
+    showCard();
+  }
+});
 
 function endSession() {
   $('flashcard-wrap').style.display = 'none';

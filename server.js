@@ -35,13 +35,13 @@ function getCardStats(cardId) {
 function resolveSmartGroup(name) {
   switch (name) {
     case 'All Cards':
-      return db.prepare('SELECT * FROM cards ORDER BY created_at DESC').all();
+      return db.prepare('SELECT * FROM cards WHERE learned = 0 ORDER BY created_at DESC').all();
 
     case 'New Cards':
       return db.prepare(`
         SELECT c.* FROM cards c
         LEFT JOIN study_log sl ON sl.card_id = c.id
-        WHERE sl.id IS NULL
+        WHERE sl.id IS NULL AND c.learned = 0
         ORDER BY c.created_at DESC
       `).all();
 
@@ -49,12 +49,12 @@ function resolveSmartGroup(name) {
       return db.prepare(`
         SELECT DISTINCT c.* FROM cards c
         JOIN study_log sl ON sl.card_id = c.id
-        WHERE sl.correct = 0 AND sl.studied_at >= datetime('now', '-7 days')
+        WHERE sl.correct = 0 AND sl.studied_at >= datetime('now', '-7 days') AND c.learned = 0
         ORDER BY sl.studied_at DESC
       `).all();
 
     case 'Struggling': {
-      const all = db.prepare('SELECT * FROM cards').all();
+      const all = db.prepare('SELECT * FROM cards WHERE learned = 0').all();
       return all.filter(c => {
         const s = getCardStats(c.id);
         return s.total >= 3 && (s.correct / s.total) < 0.5;
@@ -62,12 +62,15 @@ function resolveSmartGroup(name) {
     }
 
     case 'Mastered': {
-      const all = db.prepare('SELECT * FROM cards').all();
+      const all = db.prepare('SELECT * FROM cards WHERE learned = 0').all();
       return all.filter(c => {
         const s = getCardStats(c.id);
         return s.total >= 5 && (s.correct / s.total) >= 0.8;
       });
     }
+
+    case 'Learned':
+      return db.prepare('SELECT * FROM cards WHERE learned = 1 ORDER BY created_at DESC').all();
 
     default:
       return [];
@@ -77,7 +80,10 @@ function resolveSmartGroup(name) {
 // ─── Cards API ──────────────────────────────────────────────────────────────
 
 app.get('/api/cards', (req, res) => {
-  const cards = db.prepare('SELECT * FROM cards ORDER BY created_at DESC').all();
+  const showLearned = req.query.learned === '1';
+  const cards = showLearned
+    ? db.prepare('SELECT * FROM cards WHERE learned = 1 ORDER BY created_at DESC').all()
+    : db.prepare('SELECT * FROM cards WHERE learned = 0 ORDER BY created_at DESC').all();
   res.json(cards.map(c => ({ ...c, stats: getCardStats(c.id) })));
 });
 
@@ -222,7 +228,7 @@ app.get('/api/groups/:id/cards', (req, res) => {
     : db.prepare(`
         SELECT c.* FROM cards c
         JOIN card_groups cg ON cg.card_id = c.id
-        WHERE cg.group_id = ?
+        WHERE cg.group_id = ? AND c.learned = 0
         ORDER BY c.created_at DESC
       `).all(g.id);
 
@@ -264,7 +270,7 @@ app.get('/api/tags/:id/cards', (req, res) => {
   const cards = db.prepare(`
     SELECT c.* FROM cards c
     JOIN card_tags ct ON ct.card_id = c.id
-    WHERE ct.tag_id = ?
+    WHERE ct.tag_id = ? AND c.learned = 0
     ORDER BY c.created_at DESC
   `).all(tag.id);
 
@@ -298,6 +304,14 @@ app.put('/api/cards/:id/level', (req, res) => {
   })();
 
   res.json({ ok: true });
+});
+
+// Mark / unmark a card as learned
+app.put('/api/cards/:id/learned', (req, res) => {
+  const learned = req.body.learned ? 1 : 0;
+  const result = db.prepare('UPDATE cards SET learned = ? WHERE id = ?').run(learned, req.params.id);
+  if (!result.changes) return res.status(404).json({ error: 'Not found' });
+  res.json({ ok: true, learned });
 });
 
 // Replace all topic tags for a card

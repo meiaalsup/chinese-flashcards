@@ -55,14 +55,18 @@ db.exec(`
   );
 `);
 
+// Add learned column to existing databases (safe to run repeatedly)
+try { db.exec('ALTER TABLE cards ADD COLUMN learned INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+
 // Seed default smart groups
 const seedGroups = db.prepare(`
   INSERT OR IGNORE INTO groups (name, color, is_smart) VALUES (?, ?, ?)
 `);
-seedGroups.run('All Cards', '#6366f1', 1);
-seedGroups.run('New Cards', '#22c55e', 1);
+seedGroups.run('All Cards',       '#6366f1', 1);
+seedGroups.run('New Cards',       '#22c55e', 1);
 seedGroups.run('Recent Mistakes', '#ef4444', 1);
-seedGroups.run('Struggling', '#f97316', 1);
-seedGroups.run('Mastered', '#8b5cf6', 1);
+seedGroups.run('Struggling',      '#f97316', 1);
+seedGroups.run('Mastered',        '#8b5cf6', 1);
+seedGroups.run('Learned',         '#10b981', 1);
 
 module.exports = db;
