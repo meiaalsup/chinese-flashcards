@@ -1,3 +1,4 @@
 node_modules/
 flashcards.db-shm
 flashcards.db-wal
+.DS_Store
