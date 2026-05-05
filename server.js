@@ -26,6 +26,26 @@ app.use(async (req, res, next) => {
 let dictLookupChinese = null;
 let dictLookupEnglish = null;
 let dictReady = false;
+let dictInitPromise = null;
+
+async function initDictionary(log = false) {
+  if (dictInitPromise) return dictInitPromise;
+  dictInitPromise = (async () => {
+    try {
+      const dict = await import('./dict.mjs');
+      dictLookupChinese = dict.lookupChinese;
+      dictLookupEnglish = dict.lookupEnglish;
+      dictReady = true;
+      if (log) console.log('Dictionary loaded. Auto-lookup is ready.\n');
+    } catch (err) {
+      if (log) {
+        console.error('Dictionary failed to load:', err.message);
+        console.log('Pinyin and translations will need to be entered manually.\n');
+      }
+    }
+  })();
+  return dictInitPromise;
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -520,16 +540,7 @@ async function startLocal() {
     console.log('Loading dictionary...\n');
   });
 
-  try {
-    const dict = await import('./dict.mjs');
-    dictLookupChinese = dict.lookupChinese;
-    dictLookupEnglish = dict.lookupEnglish;
-    dictReady = true;
-    console.log('Dictionary loaded. Auto-lookup is ready.\n');
-  } catch (err) {
-    console.error('Dictionary failed to load:', err.message);
-    console.log('Pinyin and translations will need to be entered manually.\n');
-  }
+  await initDictionary(true);
 }
 
 if (require.main === module && !process.env.VERCEL) {
@@ -537,6 +548,9 @@ if (require.main === module && !process.env.VERCEL) {
     console.error('Failed to start:', err);
     process.exit(1);
   });
+} else {
+  // On serverless (e.g. Vercel), initialize dictionary when module is loaded.
+  initDictionary(false);
 }
 
 module.exports = app;
