@@ -121,7 +121,7 @@ async function confirmNewGroup() {
   if (!name) { $('gen-new-group-name').focus(); return; }
   try {
     const group = await api('POST', '/api/groups', { name, color: '#4f8ef7' });
-    await loadAll();
+    await refreshMeta();
     loadGroupsIntoSelect(group.id);
     $('gen-new-group-wrap').style.display = 'none';
   } catch (e) {
@@ -153,7 +153,9 @@ $('gen-btn').addEventListener('click', async () => {
     renderPreview();
     $('gen-preview').style.display = 'block';
     $('gen-input').value = '';
-    await loadAll();
+    invalidateAllTagCache();
+    await Promise.all([refreshCards(), refreshMeta()]);
+    renderActiveTab();
   } catch (e) {
     alert('Error generating cards: ' + e.message);
   } finally {
@@ -203,7 +205,9 @@ function renderPreview() {
       await api('DELETE', `/api/cards/${card.id}`);
       previewCards.splice(i, 1);
       renderPreview();
-      await loadAll();
+      invalidateAllTagCache();
+      await Promise.all([refreshCards(), refreshMeta()]);
+      renderActiveTab();
     });
     row.appendChild(delBtn);
     container.appendChild(row);
@@ -363,7 +367,7 @@ function buildCardItem(card) {
     learnedBtn.textContent = nowLearned ? '✓ Learned' : 'Mark learned';
     learnedBtn.classList.toggle('is-learned', nowLearned);
     learnedBtn.title = nowLearned ? 'Click to move back to active' : 'Mark as learned and hide from deck';
-    await loadAll();
+    await Promise.all([refreshCards(), refreshMeta()]);
     renderCards($('cards-search').value, $('cards-tag-filter').value);
   });
 
@@ -473,7 +477,8 @@ function openEditCard(card) {
         await api('PUT', `/api/cards/${savedCard.id}/topics`, { tagIds: [...selectedTopicIds] });
       }
       tagCache.delete(savedCard.id);
-      await loadAll();
+      await Promise.all([refreshCards(), refreshMeta()]);
+      populateTagFilter();
       renderCards($('cards-search').value);
       closeModal();
     } catch (e) { alert('Error: ' + e.message); }
@@ -486,7 +491,9 @@ function openEditCard(card) {
 
 async function deleteCard(id) {
   await api('DELETE', `/api/cards/${id}`);
-  await loadAll();
+  tagCache.delete(id);
+  await Promise.all([refreshCards(), refreshMeta()]);
+  populateTagFilter();
   renderCards($('cards-search').value);
 }
 
@@ -615,7 +622,9 @@ function buildGroupCard(group) {
 
 async function deleteGroup(id) {
   await api('DELETE', `/api/groups/${id}`);
-  await loadAll(); renderGroups();
+  await refreshMeta();
+  loadGroupsIntoSelect();
+  renderGroups();
 }
 
 $('new-group-btn').addEventListener('click', () => {
@@ -646,7 +655,10 @@ $('new-group-btn').addEventListener('click', () => {
     const name = nameInp.value.trim();
     if (!name) { alert('Enter a group name'); return; }
     await api('POST', '/api/groups', { name, color: colorPicker.value });
-    await loadAll(); renderGroups(); loadGroupsIntoSelect(); closeModal();
+    await refreshMeta();
+    renderGroups();
+    loadGroupsIntoSelect();
+    closeModal();
   });
   footer.append(cancelBtn, saveBtn);
   body.appendChild(footer);
@@ -678,7 +690,10 @@ async function openGroupDetail(group) {
         const rem = el('button', 'btn btn-ghost btn-sm', 'Remove');
         rem.addEventListener('click', async () => {
           await api('DELETE', `/api/groups/${group.id}/cards/${card.id}`);
-          row.remove(); await loadAll();
+          row.remove();
+          await refreshMeta();
+          renderGroups();
+          loadGroupsIntoSelect();
         });
         row.appendChild(rem);
       }
@@ -789,7 +804,8 @@ async function openAddCardsToGroup(group) {
   addBtn.addEventListener('click', async () => {
     if (!selected.size) { alert('Select at least one card'); return; }
     await api('POST', `/api/groups/${group.id}/cards`, { cardIds: [...selected] });
-    await loadAll(); openGroupDetail(group);
+    await refreshMeta();
+    openGroupDetail(group);
   });
   footer.append(backBtn, addBtn);
   body.appendChild(footer);
@@ -982,7 +998,7 @@ function endSession() {
     <div><div class="done-stat-label">Reviewed</div>
     <div class="done-stat-val">${total}</div></div>
   `;
-  loadAll();
+  Promise.all([refreshCards(), refreshMeta()]).catch(console.error);
 }
 
 $('session-back').addEventListener('click', () => {
@@ -1028,21 +1044,16 @@ function switchTab(name) {
 
 /* ── Bootstrap ──────────────────────────────────────────────────────────── */
 
-async function loadAll() {
-  [allCards, allGroups, allTags] = await Promise.all([
-    api('GET', '/api/cards'),
-    api('GET', '/api/groups'),
-    api('GET', '/api/tags'),
-  ]);
-  cardTagMap.clear();
+function invalidateAllTagCache() {
   tagCache.clear();
+  tagsPrefetchToken++;
 }
 
-async function loadCardsFirst() {
+async function refreshCards() {
   allCards = await api('GET', '/api/cards');
 }
 
-async function loadMeta() {
+async function refreshMeta() {
   [allGroups, allTags] = await Promise.all([
     api('GET', '/api/groups'),
     api('GET', '/api/tags'),
@@ -1059,13 +1070,13 @@ function renderActiveTab() {
 
 async function init() {
   $('cards-list').innerHTML = '<div class="empty-state">Loading cards…</div>';
-  await loadCardsFirst();
+  await refreshCards();
   renderCards();
   $('cards-count').textContent = `${allCards.length} card${allCards.length !== 1 ? 's' : ''}`;
   pollDictStatus();
 
   // Load groups/tags after cards so cards page appears first.
-  await loadMeta();
+  await refreshMeta();
   loadGroupsIntoSelect();
   populateTagFilter();
   renderActiveTab();
