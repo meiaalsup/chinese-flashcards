@@ -356,11 +356,16 @@ app.get('*', (req, res) => {
 const PORT = process.env.PORT || 3456;
 
 async function start() {
-  // Start server immediately so the UI is available while the dictionary loads
   app.listen(PORT, () => {
     console.log(`\nChinese Flashcards running at http://localhost:${PORT}`);
     console.log('Loading dictionary...\n');
   });
+
+  // Skip dictionary on Vercel — it's too large and only needed for card generation
+  if (process.env.VERCEL) {
+    console.log('Vercel environment detected — skipping dictionary load.\n');
+    return;
+  }
 
   try {
     const dict = await import('./dict.mjs');
