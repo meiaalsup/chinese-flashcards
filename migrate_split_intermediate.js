@@ -6,7 +6,7 @@
  * Also updates autotag.js heuristic to use the new levels.
  */
 
-const db = require('./db');
+const db = require('./sqlite-migrate-db');
 
 db.transaction(() => {
   // 1. Insert the two new level tags (or ignore if they already exist)

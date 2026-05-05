@@ -4,3 +4,4 @@ flashcards.db-wal
 .DS_Store
 .vercel
 .railway
+.env

@@ -1,11 +1,25 @@
+require('dotenv').config();
+
 const express = require('express');
 const path = require('path');
-const db = require('./db');
+const dbPromise = require('./db');
 const { autoTagCard } = require('./autotag');
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+let db;
+const dbReady = dbPromise.then((d) => { db = d; return d; });
+
+app.use(async (req, res, next) => {
+  try {
+    await dbReady;
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ─── Dict module (ESM, loaded async at startup) ──────────────────────────────
 
@@ -26,19 +40,38 @@ function parseInput(raw) {
     .filter(Boolean);
 }
 
-function getCardStats(cardId) {
-  const total = db.prepare('SELECT COUNT(*) as n FROM study_log WHERE card_id = ?').get(cardId);
-  const correct = db.prepare('SELECT COUNT(*) as n FROM study_log WHERE card_id = ? AND correct = 1').get(cardId);
-  return { total: total.n, correct: correct.n };
+async function getCardStats(cardId) {
+  const total = await db.prepare('SELECT COUNT(*) as n FROM study_log WHERE card_id = ?').get(cardId);
+  const correct = await db.prepare('SELECT COUNT(*) as n FROM study_log WHERE card_id = ? AND correct = 1').get(cardId);
+  return { total: Number(total.n), correct: Number(correct.n) };
 }
 
-function resolveSmartGroup(name) {
+async function attachStats(cards) {
+  if (!cards.length) return [];
+
+  const ids = cards.map(c => c.id);
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = await db.prepare(`
+    SELECT
+      card_id,
+      COUNT(*)::int AS total,
+      SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END)::int AS correct
+    FROM study_log
+    WHERE card_id IN (${placeholders})
+    GROUP BY card_id
+  `).all(...ids);
+
+  const statsById = new Map(rows.map(r => [Number(r.card_id), { total: Number(r.total), correct: Number(r.correct) }]));
+  return cards.map(c => ({ ...c, stats: statsById.get(Number(c.id)) || { total: 0, correct: 0 } }));
+}
+
+async function resolveSmartGroup(name) {
   switch (name) {
     case 'All Cards':
-      return db.prepare('SELECT * FROM cards WHERE learned = 0 ORDER BY created_at DESC').all();
+      return await db.prepare('SELECT * FROM cards WHERE learned = 0 ORDER BY created_at DESC').all();
 
     case 'New Cards':
-      return db.prepare(`
+      return await db.prepare(`
         SELECT c.* FROM cards c
         LEFT JOIN study_log sl ON sl.card_id = c.id
         WHERE sl.id IS NULL AND c.learned = 0
@@ -46,48 +79,121 @@ function resolveSmartGroup(name) {
       `).all();
 
     case 'Recent Mistakes':
-      return db.prepare(`
-        SELECT DISTINCT c.* FROM cards c
+      return await db.prepare(`
+        SELECT
+          c.*,
+          MAX(sl.studied_at) AS last_mistake_at
+        FROM cards c
         JOIN study_log sl ON sl.card_id = c.id
         WHERE sl.correct = 0 AND sl.studied_at >= datetime('now', '-7 days') AND c.learned = 0
-        ORDER BY sl.studied_at DESC
+        GROUP BY c.id
+        ORDER BY last_mistake_at DESC
       `).all();
 
     case 'Struggling': {
-      const all = db.prepare('SELECT * FROM cards WHERE learned = 0').all();
-      return all.filter(c => {
-        const s = getCardStats(c.id);
-        return s.total >= 3 && (s.correct / s.total) < 0.5;
-      });
+      return await db.prepare(`
+        SELECT c.* FROM cards c
+        LEFT JOIN study_log sl ON sl.card_id = c.id
+        WHERE c.learned = 0
+        GROUP BY c.id
+        HAVING COUNT(sl.id) >= 3
+          AND (SUM(CASE WHEN sl.correct = 1 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(sl.id), 0)) < 0.5
+        ORDER BY c.created_at DESC
+      `).all();
     }
 
     case 'Mastered': {
-      const all = db.prepare('SELECT * FROM cards WHERE learned = 0').all();
-      return all.filter(c => {
-        const s = getCardStats(c.id);
-        return s.total >= 5 && (s.correct / s.total) >= 0.8;
-      });
+      return await db.prepare(`
+        SELECT c.* FROM cards c
+        LEFT JOIN study_log sl ON sl.card_id = c.id
+        WHERE c.learned = 0
+        GROUP BY c.id
+        HAVING COUNT(sl.id) >= 5
+          AND (SUM(CASE WHEN sl.correct = 1 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(sl.id), 0)) >= 0.8
+        ORDER BY c.created_at DESC
+      `).all();
     }
 
     case 'Learned':
-      return db.prepare('SELECT * FROM cards WHERE learned = 1 ORDER BY created_at DESC').all();
+      return await db.prepare('SELECT * FROM cards WHERE learned = 1 ORDER BY created_at DESC').all();
 
     default:
       return [];
   }
 }
 
+async function getSmartGroupCount(name) {
+  switch (name) {
+    case 'All Cards':
+      return (await db.prepare('SELECT COUNT(*)::int AS n FROM cards WHERE learned = 0').get()).n;
+    case 'New Cards':
+      return (await db.prepare(`
+        SELECT COUNT(*)::int AS n
+        FROM cards c
+        LEFT JOIN study_log sl ON sl.card_id = c.id
+        WHERE sl.id IS NULL AND c.learned = 0
+      `).get()).n;
+    case 'Recent Mistakes':
+      return (await db.prepare(`
+        SELECT COUNT(*)::int AS n FROM (
+          SELECT c.id
+          FROM cards c
+          JOIN study_log sl ON sl.card_id = c.id
+          WHERE sl.correct = 0 AND sl.studied_at >= datetime('now', '-7 days') AND c.learned = 0
+          GROUP BY c.id
+        ) t
+      `).get()).n;
+    case 'Struggling':
+      return (await db.prepare(`
+        SELECT COUNT(*)::int AS n FROM (
+          SELECT c.id
+          FROM cards c
+          LEFT JOIN study_log sl ON sl.card_id = c.id
+          WHERE c.learned = 0
+          GROUP BY c.id
+          HAVING COUNT(sl.id) >= 3
+            AND (SUM(CASE WHEN sl.correct = 1 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(sl.id), 0)) < 0.5
+        ) t
+      `).get()).n;
+    case 'Mastered':
+      return (await db.prepare(`
+        SELECT COUNT(*)::int AS n FROM (
+          SELECT c.id
+          FROM cards c
+          LEFT JOIN study_log sl ON sl.card_id = c.id
+          WHERE c.learned = 0
+          GROUP BY c.id
+          HAVING COUNT(sl.id) >= 5
+            AND (SUM(CASE WHEN sl.correct = 1 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(sl.id), 0)) >= 0.8
+        ) t
+      `).get()).n;
+    case 'Learned':
+      return (await db.prepare('SELECT COUNT(*)::int AS n FROM cards WHERE learned = 1').get()).n;
+    default:
+      return 0;
+  }
+}
+
+function asyncRoute(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
 // ─── Cards API ──────────────────────────────────────────────────────────────
 
-app.get('/api/cards', (req, res) => {
+app.get('/api/cards', asyncRoute(async (req, res) => {
   const showLearned = req.query.learned === '1';
+  const includeStats = req.query.stats === '1';
   const cards = showLearned
-    ? db.prepare('SELECT * FROM cards WHERE learned = 1 ORDER BY created_at DESC').all()
-    : db.prepare('SELECT * FROM cards WHERE learned = 0 ORDER BY created_at DESC').all();
-  res.json(cards.map(c => ({ ...c, stats: getCardStats(c.id) })));
-});
+    ? await db.prepare('SELECT * FROM cards WHERE learned = 1 ORDER BY created_at DESC').all()
+    : await db.prepare('SELECT * FROM cards WHERE learned = 0 ORDER BY created_at DESC').all();
+  if (!includeStats) {
+    res.json(cards);
+    return;
+  }
+  res.json(await attachStats(cards));
+}));
 
-app.post('/api/cards', (req, res) => {
+app.post('/api/cards', asyncRoute(async (req, res) => {
   const { chinese, pinyin, english } = req.body;
   if (!chinese && !english) return res.status(400).json({ error: 'chinese or english required' });
 
@@ -101,42 +207,41 @@ app.post('/api/cards', (req, res) => {
     if (!en) en = r.english;
   }
 
-  const result = db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?)').run(ch, py, en);
+  const result = await db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?)').run(ch, py, en);
   const newId = result.lastInsertRowid;
-  autoTagCard(newId);
-  res.json(db.prepare('SELECT * FROM cards WHERE id = ?').get(newId));
-});
+  await autoTagCard(db, newId);
+  res.json(await db.prepare('SELECT * FROM cards WHERE id = ?').get(newId));
+}));
 
-app.put('/api/cards/:id', (req, res) => {
+app.put('/api/cards/:id', asyncRoute(async (req, res) => {
   const { chinese, pinyin, english } = req.body;
   const { id } = req.params;
-  const existing = db.prepare('SELECT * FROM cards WHERE id = ?').get(id);
+  const existing = await db.prepare('SELECT * FROM cards WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: 'Not found' });
 
   let newChinese = chinese ?? existing.chinese;
   let newPinyin = pinyin ?? existing.pinyin;
   let newEnglish = english ?? existing.english;
 
-  // If chinese changed and no explicit pinyin provided, re-derive
   if (chinese && chinese !== existing.chinese && !pinyin && dictReady) {
     const r = dictLookupChinese(chinese);
     newPinyin = r.pinyin;
     if (!newEnglish && r.english) newEnglish = r.english;
   }
 
-  db.prepare('UPDATE cards SET chinese=?, pinyin=?, english=? WHERE id=?')
+  await db.prepare('UPDATE cards SET chinese=?, pinyin=?, english=? WHERE id=?')
     .run(newChinese, newPinyin, newEnglish, id);
-  res.json(db.prepare('SELECT * FROM cards WHERE id = ?').get(id));
-});
+  res.json(await db.prepare('SELECT * FROM cards WHERE id = ?').get(id));
+}));
 
-app.delete('/api/cards/:id', (req, res) => {
-  db.prepare('DELETE FROM cards WHERE id = ?').run(req.params.id);
+app.delete('/api/cards/:id', asyncRoute(async (req, res) => {
+  await db.prepare('DELETE FROM cards WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
-});
+}));
 
 // ─── Generate (bulk import) ──────────────────────────────────────────────────
 
-app.post('/api/generate', (req, res) => {
+app.post('/api/generate', asyncRoute(async (req, res) => {
   const { text, groupId } = req.body;
   if (!text) return res.status(400).json({ error: 'text is required' });
 
@@ -145,201 +250,248 @@ app.post('/api/generate', (req, res) => {
   const insertCard = db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?)');
   const insertCG = db.prepare('INSERT OR IGNORE INTO card_groups (card_id, group_id) VALUES (?, ?)');
 
-  const insertMany = db.transaction(() => {
+  await db.transaction(async () => {
     for (const item of items) {
       if (!item) continue;
 
-      let chinese = '', pinyinStr = '', english = '';
+      let chinese = '';
+      let pinyinStr = '';
+      let englishText = '';
 
       if (isChinese(item)) {
         if (dictReady) {
           const r = dictLookupChinese(item);
           chinese = r.chinese;
           pinyinStr = r.pinyin;
-          english = r.english;
+          englishText = r.english;
         } else {
           chinese = item;
         }
-      } else {
-        // English input — attempt reverse lookup
-        if (dictReady) {
-          const r = dictLookupEnglish(item);
-          if (r) {
-            chinese = r.chinese;
-            pinyinStr = r.pinyin;
-            english = r.english;
-          } else {
-            // Dictionary miss: store as English-only card, leave Chinese/pinyin blank
-            english = item;
-          }
+      } else if (dictReady) {
+        const r = dictLookupEnglish(item);
+        if (r) {
+          chinese = r.chinese;
+          pinyinStr = r.pinyin;
+          englishText = r.english;
         } else {
-          english = item;
+          englishText = item;
         }
+      } else {
+        englishText = item;
       }
 
-      const result = insertCard.run(chinese, pinyinStr, english);
+      const result = await insertCard.run(chinese, pinyinStr, englishText);
       const cardId = result.lastInsertRowid;
-      autoTagCard(cardId);
-      const card = db.prepare('SELECT * FROM cards WHERE id = ?').get(cardId);
+      await autoTagCard(db, cardId);
+      const card = await db.prepare('SELECT * FROM cards WHERE id = ?').get(cardId);
       created.push(card);
 
-      if (groupId) insertCG.run(card.id, groupId);
+      if (groupId) await insertCG.run(card.id, groupId);
     }
-  });
+  })();
 
-  insertMany();
   res.json({ created });
-});
+}));
 
 // ─── Groups API ──────────────────────────────────────────────────────────────
 
-app.get('/api/groups', (req, res) => {
-  const groups = db.prepare('SELECT * FROM groups ORDER BY is_smart DESC, created_at ASC').all();
-  const withCounts = groups.map(g => {
+app.get('/api/groups', asyncRoute(async (req, res) => {
+  const groups = await db.prepare('SELECT * FROM groups ORDER BY is_smart DESC, created_at ASC').all();
+  const customGroupCountRows = await db.prepare(`
+    SELECT group_id, COUNT(*)::int AS n
+    FROM card_groups
+    GROUP BY group_id
+  `).all();
+  const customCountMap = new Map(customGroupCountRows.map(r => [Number(r.group_id), Number(r.n)]));
+  const withCounts = [];
+  for (const g of groups) {
     const count = g.is_smart
-      ? resolveSmartGroup(g.name).length
-      : db.prepare('SELECT COUNT(*) as n FROM card_groups WHERE group_id = ?').get(g.id).n;
-    return { ...g, count };
-  });
+      ? await getSmartGroupCount(g.name)
+      : (customCountMap.get(Number(g.id)) || 0);
+    withCounts.push({ ...g, count: Number(count) });
+  }
   res.json(withCounts);
-});
+}));
 
-app.post('/api/groups', (req, res) => {
+app.post('/api/groups', asyncRoute(async (req, res) => {
   const { name, color } = req.body;
   if (!name) return res.status(400).json({ error: 'name is required' });
-  const result = db.prepare('INSERT INTO groups (name, color) VALUES (?, ?)').run(name, color || '#4f8ef7');
-  res.json(db.prepare('SELECT * FROM groups WHERE id = ?').get(result.lastInsertRowid));
-});
+  const result = await db.prepare('INSERT INTO groups (name, color) VALUES (?, ?)').run(name, color || '#4f8ef7');
+  res.json(await db.prepare('SELECT * FROM groups WHERE id = ?').get(result.lastInsertRowid));
+}));
 
-app.delete('/api/groups/:id', (req, res) => {
-  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id);
+app.delete('/api/groups/:id', asyncRoute(async (req, res) => {
+  const g = await db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id);
   if (!g) return res.status(404).json({ error: 'Not found' });
   if (g.is_smart) return res.status(400).json({ error: 'Cannot delete smart groups' });
-  db.prepare('DELETE FROM groups WHERE id = ?').run(req.params.id);
+  await db.prepare('DELETE FROM groups WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
-});
+}));
 
-app.get('/api/groups/:id/cards', (req, res) => {
-  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id);
+app.get('/api/groups/:id/cards', asyncRoute(async (req, res) => {
+  const g = await db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id);
   if (!g) return res.status(404).json({ error: 'Not found' });
 
   const cards = g.is_smart
-    ? resolveSmartGroup(g.name)
-    : db.prepare(`
+    ? await resolveSmartGroup(g.name)
+    : await db.prepare(`
         SELECT c.* FROM cards c
         JOIN card_groups cg ON cg.card_id = c.id
         WHERE cg.group_id = ? AND c.learned = 0
         ORDER BY c.created_at DESC
       `).all(g.id);
 
-  res.json(cards.map(c => ({ ...c, stats: getCardStats(c.id) })));
-});
+  res.json(await attachStats(cards));
+}));
 
-app.post('/api/groups/:id/cards', (req, res) => {
+app.post('/api/groups/:id/cards', asyncRoute(async (req, res) => {
   const { cardIds } = req.body;
-  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id);
+  const g = await db.prepare('SELECT * FROM groups WHERE id = ?').get(req.params.id);
   if (!g) return res.status(404).json({ error: 'Not found' });
   if (g.is_smart) return res.status(400).json({ error: 'Cannot manually add to smart groups' });
 
   const insert = db.prepare('INSERT OR IGNORE INTO card_groups (card_id, group_id) VALUES (?, ?)');
-  db.transaction(() => { for (const id of cardIds) insert.run(id, g.id); })();
+  await db.transaction(async () => {
+    for (const id of cardIds || []) await insert.run(id, g.id);
+  })();
   res.json({ ok: true });
-});
+}));
 
-app.delete('/api/groups/:id/cards/:cardId', (req, res) => {
-  db.prepare('DELETE FROM card_groups WHERE group_id = ? AND card_id = ?')
+app.delete('/api/groups/:id/cards/:cardId', asyncRoute(async (req, res) => {
+  await db.prepare('DELETE FROM card_groups WHERE group_id = ? AND card_id = ?')
     .run(req.params.id, req.params.cardId);
   res.json({ ok: true });
-});
+}));
 
 // ─── Tags API ────────────────────────────────────────────────────────────────
 
-app.get('/api/tags', (req, res) => {
-  const tags = db.prepare('SELECT * FROM tags ORDER BY type DESC, sort_order').all();
-  const withCounts = tags.map(t => {
-    const { n } = db.prepare('SELECT COUNT(*) as n FROM card_tags WHERE tag_id = ?').get(t.id);
-    return { ...t, count: n };
-  });
+app.get('/api/tags', asyncRoute(async (req, res) => {
+  const tags = await db.prepare('SELECT * FROM tags ORDER BY type DESC, sort_order').all();
+  const countRows = await db.prepare(`
+    SELECT tag_id, COUNT(*)::int AS n
+    FROM card_tags
+    GROUP BY tag_id
+  `).all();
+  const countMap = new Map(countRows.map(r => [Number(r.tag_id), Number(r.n)]));
+  const withCounts = [];
+  for (const t of tags) {
+    withCounts.push({ ...t, count: countMap.get(Number(t.id)) || 0 });
+  }
   res.json(withCounts);
-});
+}));
 
-app.get('/api/tags/:id/cards', (req, res) => {
-  const tag = db.prepare('SELECT * FROM tags WHERE id = ?').get(req.params.id);
+app.get('/api/tags/:id/cards', asyncRoute(async (req, res) => {
+  const tag = await db.prepare('SELECT * FROM tags WHERE id = ?').get(req.params.id);
   if (!tag) return res.status(404).json({ error: 'Not found' });
 
-  const cards = db.prepare(`
+  const cards = await db.prepare(`
     SELECT c.* FROM cards c
     JOIN card_tags ct ON ct.card_id = c.id
     WHERE ct.tag_id = ? AND c.learned = 0
     ORDER BY c.created_at DESC
   `).all(tag.id);
 
-  res.json(cards.map(c => ({ ...c, stats: getCardStats(c.id) })));
-});
+  res.json(await attachStats(cards));
+}));
 
-// Get tags for a specific card
-app.get('/api/cards/:id/tags', (req, res) => {
-  const tags = db.prepare(`
+app.get('/api/cards/tags-bulk', asyncRoute(async (req, res) => {
+  const idsRaw = (req.query.ids || '').toString().trim();
+  if (!idsRaw) return res.json({});
+
+  const ids = idsRaw
+    .split(',')
+    .map(s => Number(s.trim()))
+    .filter(n => Number.isInteger(n) && n > 0);
+
+  if (!ids.length) return res.json({});
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = await db.prepare(`
+    SELECT
+      ct.card_id,
+      t.*
+    FROM card_tags ct
+    JOIN tags t ON t.id = ct.tag_id
+    WHERE ct.card_id IN (${placeholders})
+    ORDER BY t.type DESC, t.sort_order
+  `).all(...ids);
+
+  const out = {};
+  for (const id of ids) out[id] = [];
+  for (const row of rows) {
+    out[row.card_id].push({
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      color: row.color,
+      emoji: row.emoji,
+      sort_order: row.sort_order,
+    });
+  }
+  res.json(out);
+}));
+
+app.get('/api/cards/:id/tags', asyncRoute(async (req, res) => {
+  const tags = await db.prepare(`
     SELECT t.* FROM tags t
     JOIN card_tags ct ON ct.tag_id = t.id
     WHERE ct.card_id = ?
     ORDER BY t.type DESC, t.sort_order
   `).all(req.params.id);
   res.json(tags);
-});
+}));
 
-// Update a card's level tag
-app.put('/api/cards/:id/level', (req, res) => {
+app.put('/api/cards/:id/level', asyncRoute(async (req, res) => {
   const { level } = req.body;
-  const tag = db.prepare("SELECT * FROM tags WHERE name = ? AND type = 'level'").get(level);
+  const tag = await db.prepare("SELECT * FROM tags WHERE name = ? AND type = 'level'").get(level);
   if (!tag) return res.status(400).json({ error: 'Invalid level' });
 
-  const levelTagIds = db.prepare("SELECT id FROM tags WHERE type = 'level'").all().map(t => t.id);
+  const levelRows = await db.prepare("SELECT id FROM tags WHERE type = 'level'").all();
+  const levelTagIds = levelRows.map(t => t.id);
 
-  db.transaction(() => {
+  await db.transaction(async () => {
     for (const lid of levelTagIds) {
-      db.prepare('DELETE FROM card_tags WHERE card_id = ? AND tag_id = ?').run(req.params.id, lid);
+      await db.prepare('DELETE FROM card_tags WHERE card_id = ? AND tag_id = ?').run(req.params.id, lid);
     }
-    db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag_id) VALUES (?, ?)').run(req.params.id, tag.id);
+    await db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag_id) VALUES (?, ?)').run(req.params.id, tag.id);
   })();
 
   res.json({ ok: true });
-});
+}));
 
-// Mark / unmark a card as learned
-app.put('/api/cards/:id/learned', (req, res) => {
+app.put('/api/cards/:id/learned', asyncRoute(async (req, res) => {
   const learned = req.body.learned ? 1 : 0;
-  const result = db.prepare('UPDATE cards SET learned = ? WHERE id = ?').run(learned, req.params.id);
+  const result = await db.prepare('UPDATE cards SET learned = ? WHERE id = ?').run(learned, req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'Not found' });
   res.json({ ok: true, learned });
-});
+}));
 
-// Replace all topic tags for a card
-app.put('/api/cards/:id/topics', (req, res) => {
-  const { tagIds } = req.body; // array of topic tag IDs to apply
+app.put('/api/cards/:id/topics', asyncRoute(async (req, res) => {
+  const { tagIds } = req.body;
   if (!Array.isArray(tagIds)) return res.status(400).json({ error: 'tagIds must be an array' });
 
-  const topicTagIds = db.prepare("SELECT id FROM tags WHERE type = 'topic'").all().map(t => t.id);
+  const topicRows = await db.prepare("SELECT id FROM tags WHERE type = 'topic'").all();
+  const topicTagIds = topicRows.map(t => t.id);
 
-  db.transaction(() => {
+  await db.transaction(async () => {
     for (const tid of topicTagIds) {
-      db.prepare('DELETE FROM card_tags WHERE card_id = ? AND tag_id = ?').run(req.params.id, tid);
+      await db.prepare('DELETE FROM card_tags WHERE card_id = ? AND tag_id = ?').run(req.params.id, tid);
     }
     for (const tid of tagIds) {
-      db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag_id) VALUES (?, ?)').run(req.params.id, tid);
+      await db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag_id) VALUES (?, ?)').run(req.params.id, tid);
     }
   })();
 
   res.json({ ok: true });
-});
+}));
 
 // ─── Study API ───────────────────────────────────────────────────────────────
 
-app.post('/api/study', (req, res) => {
+app.post('/api/study', asyncRoute(async (req, res) => {
   const { cardId, correct } = req.body;
-  db.prepare('INSERT INTO study_log (card_id, correct) VALUES (?, ?)').run(cardId, correct ? 1 : 0);
+  await db.prepare('INSERT INTO study_log (card_id, correct) VALUES (?, ?)').run(cardId, correct ? 1 : 0);
   res.json({ ok: true });
-});
+}));
 
 app.get('/api/status', (req, res) => {
   res.json({ dictReady });
@@ -351,21 +503,22 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ─── Startup ──────────────────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// ─── Startup (local only; Vercel uses the exported app) ─────────────────────
 
 const PORT = process.env.PORT || 3456;
 
-async function start() {
+async function startLocal() {
+  await dbReady;
+
   app.listen(PORT, () => {
     console.log(`\nChinese Flashcards running at http://localhost:${PORT}`);
     console.log('Loading dictionary...\n');
   });
-
-  // Skip dictionary on Vercel — it's too large and only needed for card generation
-  if (process.env.VERCEL) {
-    console.log('Vercel environment detected — skipping dictionary load.\n');
-    return;
-  }
 
   try {
     const dict = await import('./dict.mjs');
@@ -379,4 +532,11 @@ async function start() {
   }
 }
 
-start();
+if (require.main === module && !process.env.VERCEL) {
+  startLocal().catch((err) => {
+    console.error('Failed to start:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = app;

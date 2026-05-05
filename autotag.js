@@ -3,8 +3,6 @@
  * Called from server.js after a card is created.
  */
 
-const db = require('./db');
-
 // ── Topic keyword matching ──────────────────────────────────────────────────
 
 const TOPIC_KEYWORDS = {
@@ -74,75 +72,63 @@ const TOPIC_KEYWORDS = {
 };
 
 // ── Level heuristics ────────────────────────────────────────────────────────
-// Based on character count and syllable count (rough proxy for complexity)
 
 function guessLevel(chinese, english) {
   const syllableCount = (chinese || '').replace(/[^\u4e00-\u9fff\u3400-\u4dbf]/g, '').length;
 
-  // Specialized: very long compounds or highly technical English
   const technicalTerms = ['genotype', 'phenotype', 'blastocyst', 'bioreactor', 'embryo',
     'heredity', 'genomic', 'genetic testing', 'iq', 'chromosome'];
   if (technicalTerms.some(t => (english || '').toLowerCase().includes(t))) return 'Specialized';
   if (syllableCount >= 5) return 'Specialized';
 
-  // Advanced: 3-4 hanzi compounds
   if (syllableCount >= 3) return 'Advanced';
 
-  // Beginner: single characters with very basic meanings
   const beginnerWords = ['water', 'fire', 'wood', 'hello', 'thank', 'goodbye', 'cat', 'dog',
     'fish', 'bird', 'rice', 'eat', 'drink', 'go', 'come', 'good', 'bad', 'big', 'small',
     'mother', 'father', 'friend', 'student', 'teacher', 'person'];
   if (syllableCount === 1 && beginnerWords.some(w => (english || '').toLowerCase().includes(w))) return 'Beginner';
-  if (syllableCount === 1) return 'Beginner 2'; // single chars that aren't ultra-basic
+  if (syllableCount === 1) return 'Beginner 2';
 
-  // 2-char words: split by how common/foundational the concept is
-  // Short English definition (1-2 words) = probably a clear, common concept → Beginner 2
-  // Longer definition = more nuanced/contextual → Intermediate 1 or 2
   const wordCount = (english || '').trim().split(/\s+/).length;
   if (wordCount <= 2) return 'Beginner 2';
   return wordCount <= 5 ? 'Intermediate 1' : 'Intermediate 2';
 }
 
-// ── Main auto-tag function ──────────────────────────────────────────────────
-
-function autoTagCard(cardId) {
-  const card = db.prepare('SELECT * FROM cards WHERE id = ?').get(cardId);
+async function autoTagCard(db, cardId) {
+  const card = await db.prepare('SELECT * FROM cards WHERE id = ?').get(cardId);
   if (!card) return;
 
   const en = (card.english || '').toLowerCase();
   const insertTag = db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag_id) VALUES (?, ?)');
 
-  const getTagId = name => db.prepare('SELECT id FROM tags WHERE name = ?').get(name)?.id;
+  const getTagId = async name => (await db.prepare('SELECT id FROM tags WHERE name = ?').get(name))?.id;
 
-  db.transaction(() => {
-    // Topic — use word-boundary matching for single-word keywords so that
-    // e.g. "mushroom" doesn't match the Housing keyword "room".
+  await db.transaction(async () => {
     function kwMatch(text, kw) {
-      if (kw.includes(' ')) return text.includes(kw); // multi-word: substring is fine
+      if (kw.includes(' ')) return text.includes(kw);
       return new RegExp('\\b' + kw + '\\b').test(text);
     }
 
     let matched = false;
     for (const [topic, keywords] of Object.entries(TOPIC_KEYWORDS)) {
       if (keywords.some(kw => kwMatch(en, kw))) {
-        const id = getTagId(topic);
-        if (id) { insertTag.run(cardId, id); matched = true; }
+        const id = await getTagId(topic);
+        if (id) { await insertTag.run(cardId, id); matched = true; }
       }
     }
     if (!matched) {
-      const id = getTagId('General');
-      if (id) insertTag.run(cardId, id);
+      const id = await getTagId('General');
+      if (id) await insertTag.run(cardId, id);
     }
 
-    // Level (only if not already tagged)
-    const hasLevel = db.prepare(`
-      SELECT 1 FROM card_tags ct JOIN tags t ON t.id = ct.tag_id
+    const hasLevel = await db.prepare(`
+      SELECT 1 AS ok FROM card_tags ct JOIN tags t ON t.id = ct.tag_id
       WHERE ct.card_id = ? AND t.type = 'level'
     `).get(cardId);
     if (!hasLevel) {
       const level = guessLevel(card.chinese, card.english);
-      const id = getTagId(level);
-      if (id) insertTag.run(cardId, id);
+      const id = await getTagId(level);
+      if (id) await insertTag.run(cardId, id);
     }
   })();
 }

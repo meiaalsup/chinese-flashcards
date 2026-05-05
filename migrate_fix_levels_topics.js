@@ -14,7 +14,7 @@
  *   Fix keyword list in autotag.js to avoid future mis-tagging.
  */
 
-const db = require('./db');
+const db = require('./sqlite-migrate-db');
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

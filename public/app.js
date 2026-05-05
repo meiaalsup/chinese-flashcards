@@ -238,6 +238,15 @@ function populateTagFilter() {
 
 // cardId → tag list (fetched + cached)
 const tagCache = new Map();
+let tagsPrefetchToken = 0;
+
+async function getCardTagsBulk(cardIds) {
+  const ids = [...new Set(cardIds.map(Number).filter(n => Number.isInteger(n) && n > 0))];
+  if (!ids.length) return {};
+  const qs = encodeURIComponent(ids.join(','));
+  return api('GET', `/api/cards/tags-bulk?ids=${qs}`);
+}
+
 async function getCardTags(cardId) {
   if (tagCache.has(cardId)) return tagCache.get(cardId);
   const tags = await api('GET', `/api/cards/${cardId}/tags`);
@@ -249,9 +258,11 @@ async function getCardTags(cardId) {
 async function prefetchTagsForCards(cardIds) {
   const uncached = cardIds.filter(id => !tagCache.has(id));
   if (!uncached.length) return;
-  // Fetch in parallel, 20 at a time
-  for (let i = 0; i < uncached.length; i += 20) {
-    await Promise.all(uncached.slice(i, i + 20).map(id => getCardTags(id)));
+  // Bulk fetch to avoid hundreds of per-card requests.
+  for (let i = 0; i < uncached.length; i += 200) {
+    const chunk = uncached.slice(i, i + 200);
+    const byCardId = await getCardTagsBulk(chunk);
+    chunk.forEach(id => tagCache.set(id, byCardId[id] || []));
   }
 }
 
@@ -265,7 +276,7 @@ function filterByTag(cards, tagId) {
   });
 }
 
-function renderCards(filter = '', tagId = '') {
+async function renderCards(filter = '', tagId = '') {
   const container = $('cards-list');
   container.innerHTML = '';
 
@@ -279,17 +290,14 @@ function renderCards(filter = '', tagId = '') {
     );
   }
 
-  // Tag filter — uses cached data, renders progressively
+  const myToken = ++tagsPrefetchToken;
+  // Tag filter requires tag data, so we fetch before filtering.
   if (tagId) {
-    const alreadyCached = cards.every(c => tagCache.has(c.id));
-    if (alreadyCached) {
-      cards = filterByTag(cards, tagId);
-    } else {
-      // Show loading state, then re-render once fetched
-      container.innerHTML = '<div class="empty-state">Loading…</div>';
-      prefetchTagsForCards(cards.map(c => c.id)).then(() => renderCards(filter, tagId));
-      return;
+    if (cards.length) {
+      await prefetchTagsForCards(cards.map(c => c.id));
+      if (myToken !== tagsPrefetchToken) return; // stale render pass
     }
+    cards = filterByTag(cards, tagId);
   }
 
   $('cards-count').textContent = `${cards.length} card${cards.length !== 1 ? 's' : ''}`;
@@ -299,6 +307,16 @@ function renderCards(filter = '', tagId = '') {
     return;
   }
   cards.forEach(card => container.appendChild(buildCardItem(card)));
+
+  // For normal cards view (no tag filter), render immediately and fill tag chips after.
+  if (!tagId && cards.length) {
+    const uncached = cards.filter(c => !tagCache.has(c.id)).map(c => c.id);
+    if (uncached.length) {
+      prefetchTagsForCards(uncached).then(() => {
+        if (myToken === tagsPrefetchToken) renderCards(filter, tagId);
+      });
+    }
+  }
 }
 
 function buildCardItem(card) {
@@ -319,16 +337,15 @@ function buildCardItem(card) {
     div.appendChild(stats);
   }
 
-  // Tag chips (async, rendered after mount)
+  // Tag chips (read from cache; prefetch runs before render).
   const tagRow = el('div', 'tag-row');
   div.appendChild(tagRow);
-  getCardTags(card.id).then(tags => {
-    tagRow.innerHTML = '';
-    tags.forEach(t => {
-      const chip = el('span', `tag-chip ${t.type}`, `${t.emoji} ${t.name}`);
-      chip.style.setProperty('--tag-color', t.color);
-      tagRow.appendChild(chip);
-    });
+  const tags = tagCache.get(card.id) || [];
+  tagRow.innerHTML = '';
+  tags.forEach(t => {
+    const chip = el('span', `tag-chip ${t.type}`, `${t.emoji} ${t.name}`);
+    chip.style.setProperty('--tag-color', t.color);
+    tagRow.appendChild(chip);
   });
 
   const actions = el('div', 'card-item-actions');
@@ -347,6 +364,7 @@ function buildCardItem(card) {
     learnedBtn.classList.toggle('is-learned', nowLearned);
     learnedBtn.title = nowLearned ? 'Click to move back to active' : 'Mark as learned and hide from deck';
     await loadAll();
+    renderCards($('cards-search').value, $('cards-tag-filter').value);
   });
 
   const delBtn = el('button', 'card-action-btn del', 'Delete');
@@ -361,8 +379,8 @@ function buildCardItem(card) {
   return div;
 }
 
-$('cards-search').addEventListener('input', e => renderCards(e.target.value, $('cards-tag-filter').value));
-$('cards-tag-filter').addEventListener('change', e => renderCards($('cards-search').value, e.target.value));
+$('cards-search').addEventListener('input', e => { renderCards(e.target.value, $('cards-tag-filter').value); });
+$('cards-tag-filter').addEventListener('change', e => { renderCards($('cards-search').value, e.target.value); });
 $('add-card-btn').addEventListener('click', () => openEditCard(null));
 
 function openEditCard(card) {
@@ -475,6 +493,14 @@ async function deleteCard(id) {
 /* ── Groups tab ────────────────────────────────────────────────────────── */
 
 function renderGroups() {
+  if (!allGroups.length && !allTags.length) {
+    $('smart-groups').innerHTML = '<div class="empty-state">Loading groups…</div>';
+    $('level-tags').innerHTML = '';
+    $('topic-tags').innerHTML = '';
+    $('custom-groups').innerHTML = '';
+    return;
+  }
+
   $('smart-groups').innerHTML = '';
   $('level-tags').innerHTML   = '';
   $('topic-tags').innerHTML   = '';
@@ -1012,11 +1038,37 @@ async function loadAll() {
   tagCache.clear();
 }
 
+async function loadCardsFirst() {
+  allCards = await api('GET', '/api/cards');
+}
+
+async function loadMeta() {
+  [allGroups, allTags] = await Promise.all([
+    api('GET', '/api/groups'),
+    api('GET', '/api/tags'),
+  ]);
+}
+
+function renderActiveTab() {
+  const activeBtn = document.querySelector('.nav-tab.active');
+  const tab = activeBtn?.dataset?.tab;
+  if (tab === 'cards') renderCards($('cards-search').value, $('cards-tag-filter').value);
+  if (tab === 'groups') renderGroups();
+  if (tab === 'study') renderStudyPicker();
+}
+
 async function init() {
-  await loadAll();
+  $('cards-list').innerHTML = '<div class="empty-state">Loading cards…</div>';
+  await loadCardsFirst();
+  renderCards();
+  $('cards-count').textContent = `${allCards.length} card${allCards.length !== 1 ? 's' : ''}`;
+  pollDictStatus();
+
+  // Load groups/tags after cards so cards page appears first.
+  await loadMeta();
   loadGroupsIntoSelect();
   populateTagFilter();
-  pollDictStatus();
+  renderActiveTab();
 }
 
 init().catch(console.error);

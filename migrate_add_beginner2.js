@@ -11,7 +11,7 @@
  * contextual, more nuanced, or more niche.
  */
 
-const db = require('./db');
+const db = require('./sqlite-migrate-db');
 
 // Words to promote from Intermediate 1 → Beginner 2
 // (high-frequency, foundational everyday vocabulary)

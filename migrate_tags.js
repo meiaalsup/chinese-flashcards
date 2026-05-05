@@ -3,7 +3,7 @@
  * Safe to re-run (idempotent via INSERT OR IGNORE).
  */
 
-const db = require('./db');
+const db = require('./sqlite-migrate-db');
 
 // ── 1. Remove duplicates ──────────────────────────────────────────────────────
 // Strategy: keep the lower id (earlier entry), migrate study_log refs, delete dupe.
