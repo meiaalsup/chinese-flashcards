@@ -1,10 +1,63 @@
-const Database = require('better-sqlite3');
 const path = require('path');
 
 // On Railway/Render, set DB_PATH env var to a persistent volume path (e.g. /data/flashcards.db)
 // Locally it just uses the project directory as before.
 const dbPath = process.env.DB_PATH || path.join(__dirname, 'flashcards.db');
-const db = new Database(dbPath);
+
+// ─── Choose SQLite driver ──────────────────────────────────────────────────────
+// On Vercel, better-sqlite3 has a native binary that won't run (wrong arch).
+// Use node-sqlite3-wasm (pure WASM) instead, wrapped in a better-sqlite3-compatible shim.
+
+let db;
+
+if (process.env.VERCEL) {
+  const { Database: WasmDB } = require('node-sqlite3-wasm');
+  // Vercel has no persistent FS, so use in-memory DB (read-only study still works
+  // within a single invocation; writes like study_log won't persist across cold starts)
+  const wdb = new WasmDB(':memory:');
+
+  // Wrap statement to accept spread args (better-sqlite3 style) and convert to array
+  function wrapStmt(stmt) {
+    return {
+      run(...args) {
+        const params = args.length === 1 && Array.isArray(args[0]) ? args[0] : args;
+        return stmt.run(params);
+      },
+      get(...args) {
+        const params = args.length === 1 && Array.isArray(args[0]) ? args[0] : args;
+        return stmt.get(params);
+      },
+      all(...args) {
+        const params = args.length === 1 && Array.isArray(args[0]) ? args[0] : args;
+        return stmt.all(params.length ? params : []);
+      },
+    };
+  }
+
+  db = {
+    pragma(str) { wdb.exec('PRAGMA ' + str); },
+    exec(sql)   { wdb.exec(sql); },
+    prepare(sql) { return wrapStmt(wdb.prepare(sql)); },
+    transaction(fn) {
+      return function(...args) {
+        wdb.exec('BEGIN');
+        try {
+          const result = fn(...args);
+          wdb.exec('COMMIT');
+          return result;
+        } catch (err) {
+          try { wdb.exec('ROLLBACK'); } catch (_) {}
+          throw err;
+        }
+      };
+    },
+  };
+} else {
+  const Database = require('better-sqlite3');
+  db = new Database(dbPath);
+}
+
+// ─── Schema ───────────────────────────────────────────────────────────────────
 
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
