@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "installCommand": "npm install && npm rebuild better-sqlite3",
   "builds": [
     { "src": "server.js", "use": "@vercel/node" }
   ],
