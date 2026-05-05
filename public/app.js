@@ -367,7 +367,7 @@ function buildCardItem(card) {
     learnedBtn.textContent = nowLearned ? '✓ Learned' : 'Mark learned';
     learnedBtn.classList.toggle('is-learned', nowLearned);
     learnedBtn.title = nowLearned ? 'Click to move back to active' : 'Mark as learned and hide from deck';
-    await Promise.all([refreshCards(), refreshMeta()]);
+    await refreshCards();
     renderCards($('cards-search').value, $('cards-tag-filter').value);
   });
 
@@ -433,7 +433,10 @@ function openEditCard(card) {
     topicGrid.innerHTML = '';
     let cardTopicIds = new Set();
     if (card) {
-      const existing = await api('GET', `/api/cards/${card.id}/tags`);
+      const existing = tagCache.has(card.id)
+        ? tagCache.get(card.id)
+        : await api('GET', `/api/cards/${card.id}/tags`);
+      tagCache.set(card.id, existing);
       cardTopicIds = new Set(existing.filter(t => t.type === 'topic').map(t => t.id));
     }
     selectedTopicIds = new Set(cardTopicIds);
@@ -476,11 +479,36 @@ function openEditCard(card) {
       if (selectedTopicIds.size > 0 || card) {
         await api('PUT', `/api/cards/${savedCard.id}/topics`, { tagIds: [...selectedTopicIds] });
       }
-      tagCache.delete(savedCard.id);
-      await Promise.all([refreshCards(), refreshMeta()]);
-      populateTagFilter();
-      renderCards($('cards-search').value);
+      // Keep add/edit fast: patch local state instead of reloading all cards.
+      const idx = allCards.findIndex(c => c.id === savedCard.id);
+      if (idx >= 0) {
+        allCards[idx] = { ...allCards[idx], ...savedCard };
+      } else {
+        allCards.unshift(savedCard);
+      }
+
+      if (selectedTopicIds.size > 0) {
+        const topicSet = new Set(selectedTopicIds);
+        tagCache.set(
+          savedCard.id,
+          allTags.filter(t => t.type === 'topic' && topicSet.has(t.id))
+        );
+      } else if (!card) {
+        tagCache.set(savedCard.id, []);
+      } else {
+        tagCache.delete(savedCard.id);
+      }
+
+      $('cards-count').textContent = `${allCards.length} card${allCards.length !== 1 ? 's' : ''}`;
+      renderCards($('cards-search').value, $('cards-tag-filter').value);
       closeModal();
+
+      // Local-first UI update, then silent reconcile with backend snapshot.
+      setTimeout(() => {
+        refreshCards()
+          .then(() => renderCards($('cards-search').value, $('cards-tag-filter').value))
+          .catch(() => {});
+      }, 800);
     } catch (e) { alert('Error: ' + e.message); }
   });
 
@@ -492,8 +520,7 @@ function openEditCard(card) {
 async function deleteCard(id) {
   await api('DELETE', `/api/cards/${id}`);
   tagCache.delete(id);
-  await Promise.all([refreshCards(), refreshMeta()]);
-  populateTagFilter();
+  await refreshCards();
   renderCards($('cards-search').value);
 }
 
@@ -501,6 +528,13 @@ async function deleteCard(id) {
 
 function renderGroups() {
   if (!allGroups.length && !allTags.length) {
+    const hasExisting =
+      $('smart-groups').children.length ||
+      $('level-tags').children.length ||
+      $('topic-tags').children.length ||
+      $('custom-groups').children.length;
+    if (hasExisting) return;
+
     $('smart-groups').innerHTML = '<div class="empty-state">Loading groups…</div>';
     $('level-tags').innerHTML = '';
     $('topic-tags').innerHTML = '';
@@ -998,7 +1032,7 @@ function endSession() {
     <div><div class="done-stat-label">Reviewed</div>
     <div class="done-stat-val">${total}</div></div>
   `;
-  Promise.all([refreshCards(), refreshMeta()]).catch(console.error);
+  refreshCards().catch(console.error);
 }
 
 $('session-back').addEventListener('click', () => {
