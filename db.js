@@ -131,6 +131,7 @@ async function initSchema() {
   `);
 
   const indexStmts = [
+    'CREATE UNIQUE INDEX IF NOT EXISTS cards_chinese_unique ON cards (chinese)',
     'CREATE INDEX IF NOT EXISTS idx_cards_learned_created_at ON cards (learned, created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_study_log_card_id ON study_log (card_id)',
     'CREATE INDEX IF NOT EXISTS idx_study_log_card_id_studied_at ON study_log (card_id, studied_at DESC)',
