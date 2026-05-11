@@ -227,8 +227,12 @@ app.post('/api/cards', asyncRoute(async (req, res) => {
     if (!en) en = r.english;
   }
 
-  const result = await db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?)').run(ch, py, en);
+  const result = await db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?) ON CONFLICT (chinese) DO NOTHING').run(ch, py, en);
   const newId = result.lastInsertRowid;
+  if (!newId) {
+    const existing = await db.prepare('SELECT * FROM cards WHERE chinese = ?').get(ch);
+    return res.status(409).json({ error: 'Card already exists', card: existing });
+  }
   await autoTagCard(db, newId);
   res.json(await db.prepare('SELECT * FROM cards WHERE id = ?').get(newId));
 }));
@@ -267,7 +271,7 @@ app.post('/api/generate', asyncRoute(async (req, res) => {
 
   const items = parseInput(text);
   const created = [];
-  const insertCard = db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?)');
+  const insertCard = db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?) ON CONFLICT (chinese) DO NOTHING');
   const insertCG = db.prepare('INSERT OR IGNORE INTO card_groups (card_id, group_id) VALUES (?, ?)');
 
   await db.transaction(async () => {
@@ -302,6 +306,7 @@ app.post('/api/generate', asyncRoute(async (req, res) => {
 
       const result = await insertCard.run(chinese, pinyinStr, englishText);
       const cardId = result.lastInsertRowid;
+      if (!cardId) continue;
       await autoTagCard(db, cardId);
       const card = await db.prepare('SELECT * FROM cards WHERE id = ?').get(cardId);
       created.push(card);
