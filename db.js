@@ -130,6 +130,14 @@ async function initSchema() {
     ON CONFLICT (name) DO NOTHING
   `);
 
+  // Remove duplicate chinese values before creating the unique index, keeping the lowest id
+  await rawQuery(`
+    DELETE FROM cards
+    WHERE id NOT IN (
+      SELECT MIN(id) FROM cards GROUP BY chinese
+    )
+  `);
+
   const indexStmts = [
     'CREATE UNIQUE INDEX IF NOT EXISTS cards_chinese_unique ON cards (chinese)',
     'CREATE INDEX IF NOT EXISTS idx_cards_learned_created_at ON cards (learned, created_at DESC)',
