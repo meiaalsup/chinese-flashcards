@@ -271,6 +271,7 @@ app.post('/api/generate', asyncRoute(async (req, res) => {
 
   const items = parseInput(text);
   const created = [];
+  let skipped = 0;
   const insertCard = db.prepare('INSERT INTO cards (chinese, pinyin, english) VALUES (?, ?, ?) ON CONFLICT (chinese) DO NOTHING');
   const insertCG = db.prepare('INSERT OR IGNORE INTO card_groups (card_id, group_id) VALUES (?, ?)');
 
@@ -306,7 +307,7 @@ app.post('/api/generate', asyncRoute(async (req, res) => {
 
       const result = await insertCard.run(chinese, pinyinStr, englishText);
       const cardId = result.lastInsertRowid;
-      if (!cardId) continue;
+      if (!cardId) { skipped++; continue; }
       await autoTagCard(db, cardId);
       const card = await db.prepare('SELECT * FROM cards WHERE id = ?').get(cardId);
       created.push(card);
@@ -315,7 +316,7 @@ app.post('/api/generate', asyncRoute(async (req, res) => {
     }
   })();
 
-  res.json({ created });
+  res.json({ created, skipped });
 }));
 
 // ─── Groups API ──────────────────────────────────────────────────────────────

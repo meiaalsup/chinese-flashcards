@@ -146,12 +146,16 @@ $('gen-btn').addEventListener('click', async () => {
   $('gen-btn').querySelector('span').textContent = 'Generating…';
   try {
     const groupId = $('gen-group').value || null;
-    const { created } = await api('POST', '/api/generate', {
+    const { created, skipped } = await api('POST', '/api/generate', {
       text, groupId: groupId ? +groupId : null,
     });
     previewCards = created;
     renderPreview();
     $('gen-preview').style.display = 'block';
+    if (skipped > 0) {
+      const msg = skipped === 1 ? '1 card already existed and was skipped.' : `${skipped} cards already existed and were skipped.`;
+      alert(msg);
+    }
     $('gen-input').value = '';
     invalidateAllTagCache();
     await Promise.all([refreshCards(), refreshMeta()]);
