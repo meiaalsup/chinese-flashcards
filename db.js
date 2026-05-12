@@ -213,4 +213,15 @@ function createDb() {
 
 const db = createDb();
 
-module.exports = initSchema().then(() => db);
+async function initSchemaWithRetry(retries = 4, delayMs = 1500) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await initSchema();
+    } catch (err) {
+      if (i === retries - 1 || err.code !== 'ECONNRESET') throw err;
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+}
+
+module.exports = initSchemaWithRetry().then(() => db);
