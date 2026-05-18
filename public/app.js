@@ -1,6 +1,9 @@
 /* ── Utilities ─────────────────────────────────────────────────────────── */
 
 const $ = id => document.getElementById(id);
+
+// Strip tone marks so "ni hao" matches "nǐ hǎo"
+const stripTones = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -291,9 +294,10 @@ async function renderCards(filter = '', tagId = '') {
   let cards = allCards;
   if (filter) {
     const q = filter.toLowerCase();
+    const qFlat = stripTones(q);
     cards = cards.filter(c =>
       c.chinese.includes(q) ||
-      (c.pinyin  || '').toLowerCase().includes(q) ||
+      stripTones((c.pinyin || '').toLowerCase()).includes(qFlat) ||
       (c.english || '').toLowerCase().includes(q)
     );
   }
@@ -812,7 +816,10 @@ async function openAddCardsToGroup(group) {
       if (groupCardIds.has(c.id)) return false;
       if (!filter) return true;
       const q = filter.toLowerCase();
-      return c.chinese.includes(q) || (c.english || '').toLowerCase().includes(q);
+      const qFlat = stripTones(q);
+      return c.chinese.includes(q) ||
+        stripTones((c.pinyin || '').toLowerCase()).includes(qFlat) ||
+        (c.english || '').toLowerCase().includes(q);
     });
     if (!visible.length) { listWrap.appendChild(el('div', 'empty-state', 'No cards to add.')); return; }
     visible.forEach(card => {
